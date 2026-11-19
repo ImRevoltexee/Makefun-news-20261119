@@ -27,6 +27,51 @@ def png_dims(path):
     return w, h
 
 
+def jpeg_dims(path):
+    """Read width/height from a JPEG SOF0/SOF2 segment (stdlib only)."""
+    with open(path, "rb") as fh:
+        data = fh.read(1 << 20)
+    if data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    n = len(data)
+    while i + 1 < n:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0x00, 0xFF):
+            i += 2
+            continue
+        if marker == 0xD9:  # EOI: no SOF found
+            return None
+        if marker in (0xC0, 0xC2):  # SOF0 / SOF2
+            if i + 9 > n:
+                return None
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return w, h
+        if marker == 0xDA:  # SOS: scan data follows, SOF is before it
+            return None
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2  # standalone marker, no length field
+            continue
+        if i + 4 > n:
+            return None
+        seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+        if seg_len < 2:
+            return None
+        i += 2 + seg_len
+    return None
+
+
+def image_dims(path):
+    """Width/height of a PNG or JPEG image, else None (stdlib only)."""
+    dims = png_dims(path)
+    if dims is not None:
+        return dims
+    return jpeg_dims(path)
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -47,9 +92,9 @@ def main():
     if size == 0 or size > MAX_BYTES:
         raise ValueError("entry.png size %d out of range (max %d)"
                          % (size, MAX_BYTES))
-    dims = png_dims(src)
+    dims = image_dims(src)
     if dims is None:
-        raise ValueError("entry.png is not a PNG file")
+        raise ValueError("entry.png is not a PNG or JPEG file")
     if dims[0] > MAX_DIM or dims[1] > MAX_DIM:
         raise ValueError("entry.png dimensions %dx%d exceed %d"
                          % (dims[0], dims[1], MAX_DIM))
